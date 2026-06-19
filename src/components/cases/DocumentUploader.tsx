@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { Document, DocumentType } from "@/types";
+import { Case, Document, DocumentType } from "@/types";
 import { DOCUMENT_TYPES } from "@/lib/constants";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -17,11 +17,38 @@ import { ExtractionPanel } from "./ExtractionPanel";
 
 type Props = {
   caseId: string;
+  caseData: Case;
   documents: Document[];
   onDocumentsChange: (docs: Document[]) => void;
+  onCaseChange: (updated: Case) => void;
 };
 
-export function DocumentUploader({ caseId, documents, onDocumentsChange }: Props) {
+function summarizeExtraction(doc: Document): string | null {
+  const data = (doc.confirmed_data ?? doc.extracted_data) as Record<string, string | null> | null;
+  if (!data) return null;
+  const parts = Object.entries(data)
+    .filter(([key, value]) => key !== "type" && value)
+    .slice(0, 3)
+    .map(([key, value]) => `${key.replace(/_/g, " ")}: ${value}`);
+  return parts.length > 0 ? parts.join(" · ") : "No fields read";
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string).split(",")[1] ?? "");
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+export function DocumentUploader({
+  caseId,
+  caseData,
+  documents,
+  onDocumentsChange,
+  onCaseChange,
+}: Props) {
   const [selectedType, setSelectedType] = useState<DocumentType>("申請書");
   const [uploading, setUploading] = useState(false);
   const [extractingDocId, setExtractingDocId] = useState<string | null>(null);
@@ -59,23 +86,35 @@ export function DocumentUploader({ caseId, documents, onDocumentsChange }: Props
 
       onDocumentsChange([...documents, data as Document]);
 
-      // Trigger extraction placeholder
-      setExtractingDocId(data.id);
-      const res = await fetch("/api/extract-pdf", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ document_type: selectedType }),
-      });
-      const { extracted } = await res.json();
+      // Extraction is best-effort: if it fails, the upload itself still succeeded.
+      try {
+        setExtractingDocId(data.id);
+        const file_base64 = await fileToBase64(file);
+        const res = await fetch("/api/extract-pdf", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ document_type: selectedType, file_base64 }),
+        });
 
-      await supabase
-        .from("documents")
-        .update({ extracted_data: extracted })
-        .eq("id", data.id);
+        if (!res.ok) {
+          const { error } = await res.json().catch(() => ({ error: "Extraction failed" }));
+          throw new Error(error);
+        }
 
-      onDocumentsChange(
-        [...documents, { ...data, extracted_data: extracted }] as Document[]
-      );
+        const { extracted } = await res.json();
+
+        await supabase
+          .from("documents")
+          .update({ extracted_data: extracted })
+          .eq("id", data.id);
+
+        onDocumentsChange(
+          [...documents, { ...data, extracted_data: extracted }] as Document[]
+        );
+      } catch (extractErr) {
+        console.error("Extraction failed:", extractErr);
+        setExtractingDocId(null);
+      }
     } catch (err) {
       console.error("Upload failed:", err);
     } finally {
@@ -90,19 +129,47 @@ export function DocumentUploader({ caseId, documents, onDocumentsChange }: Props
     onDocumentsChange(documents.filter((d) => d.id !== doc.id));
   }
 
-  async function handleExtractionConfirm(docId: string, data: Record<string, string>) {
-    await supabase
+  async function saveConfirmedData(docId: string, confirmed: Record<string, string | null>) {
+    const { error } = await supabase
       .from("documents")
-      .update({ extracted_data: data, extraction_confirmed: true })
+      .update({ confirmed_data: confirmed, extraction_confirmed: true })
       .eq("id", docId);
+
+    if (error) {
+      console.error("Failed to save confirmed extraction:", error);
+      return;
+    }
 
     onDocumentsChange(
       documents.map((d) =>
         d.id === docId
-          ? { ...d, extracted_data: data as Document["extracted_data"], extraction_confirmed: true }
+          ? { ...d, confirmed_data: confirmed as Document["confirmed_data"], extraction_confirmed: true }
           : d
       )
     );
+  }
+
+  async function handleApplyExtraction(
+    docId: string,
+    confirmed: Record<string, string | null>,
+    caseUpdates: Partial<Case>
+  ) {
+    await saveConfirmedData(docId, confirmed);
+
+    if (Object.keys(caseUpdates).length > 0) {
+      const { error } = await supabase.from("cases").update(caseUpdates).eq("id", caseId);
+      if (error) {
+        console.error("Failed to apply fields to case:", error);
+      } else {
+        onCaseChange({ ...caseData, ...caseUpdates });
+      }
+    }
+
+    setExtractingDocId(null);
+  }
+
+  async function handleSaveExtractionOnly(docId: string, confirmed: Record<string, string | null>) {
+    await saveConfirmedData(docId, confirmed);
     setExtractingDocId(null);
   }
 
@@ -161,21 +228,33 @@ export function DocumentUploader({ caseId, documents, onDocumentsChange }: Props
                   <div className="text-xs text-slate-400">
                     {DOCUMENT_TYPES.find((d) => d.value === doc.document_type)?.label} ·{" "}
                     {formatBytes(doc.file_size)}
-                    {doc.extraction_confirmed && (
+                    {doc.extraction_confirmed ? (
                       <Badge variant="outline" className="ml-2 text-xs py-0">
-                        Extracted
+                        Reviewed
                       </Badge>
-                    )}
+                    ) : doc.extracted_data ? (
+                      <Badge
+                        variant="outline"
+                        className="ml-2 text-xs py-0 border-amber-300 bg-amber-50 text-amber-700"
+                      >
+                        Needs review
+                      </Badge>
+                    ) : null}
                   </div>
+                  {doc.extracted_data && (
+                    <p className="text-xs text-slate-500 truncate mt-0.5">
+                      {summarizeExtraction(doc)}
+                    </p>
+                  )}
                 </div>
                 <div className="flex gap-2 shrink-0">
-                  {doc.extracted_data && !doc.extraction_confirmed && (
+                  {doc.extracted_data && (
                     <Button
                       size="sm"
                       variant="outline"
                       onClick={() => setExtractingDocId(doc.id)}
                     >
-                      Review extraction
+                      View extracted data
                     </Button>
                   )}
                   <Button
@@ -191,10 +270,15 @@ export function DocumentUploader({ caseId, documents, onDocumentsChange }: Props
 
               {extractingDocId === doc.id && doc.extracted_data && (
                 <ExtractionPanel
-                  documentId={doc.id}
+                  fileName={doc.file_name}
                   documentType={doc.document_type}
                   extractedData={doc.extracted_data}
-                  onConfirm={(data) => handleExtractionConfirm(doc.id, data)}
+                  confirmedData={doc.confirmed_data}
+                  caseData={caseData}
+                  onApply={(confirmed, caseUpdates) =>
+                    handleApplyExtraction(doc.id, confirmed, caseUpdates)
+                  }
+                  onSaveOnly={(confirmed) => handleSaveExtractionOnly(doc.id, confirmed)}
                   onDismiss={() => setExtractingDocId(null)}
                 />
               )}

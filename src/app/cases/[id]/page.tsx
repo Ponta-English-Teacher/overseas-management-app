@@ -7,6 +7,7 @@ import { Case, ChecklistItem, Document, CaseWithDetails } from "@/types";
 import { createClient } from "@/lib/supabase/client";
 import { ChecklistPanel } from "@/components/cases/ChecklistPanel";
 import { DocumentUploader } from "@/components/cases/DocumentUploader";
+import { AcademicProgramSummary } from "@/components/cases/AcademicProgramSummary";
 import { ReportTracker } from "@/components/cases/ReportTracker";
 import { ExportButton } from "@/components/cases/ExportButton";
 import { CaseForm } from "@/components/cases/CaseForm";
@@ -165,11 +166,16 @@ export default function CaseDetailPage() {
         <CardContent>
           <DocumentUploader
             caseId={id}
+            caseData={caseData}
             documents={documents}
             onDocumentsChange={setDocuments}
+            onCaseChange={setCaseData}
           />
         </CardContent>
       </Card>
+
+      {/* Academic program summary */}
+      <AcademicProgramSummary documents={documents} />
 
       {/* Report */}
       <Card>

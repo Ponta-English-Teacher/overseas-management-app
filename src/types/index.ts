@@ -53,6 +53,7 @@ export type Document = {
   file_size: number;
   uploaded_at: string;
   extracted_data: ExtractedData | null;
+  confirmed_data: ExtractedData | null;
   extraction_confirmed: boolean;
 };
 
@@ -80,17 +81,33 @@ export type CoopBrochureData = {
   country?: string;
   city?: string;
   institution?: string;
+  course_name?: string;
   program_period?: string;
-  cost?: string;
+  duration_weeks?: string;
+  start_date?: string;
+  end_date?: string;
+  lessons_per_week?: string;
+  study_hours_per_week?: string;
+  total_study_hours?: string;
   accommodation_type?: string;
+  meals?: string;
+  airport_pickup?: string;
+  cost?: string;
 };
 
 export type CoopContractData = {
   type: "生協契約書";
   student_name?: string;
   program_name?: string;
+  course_name?: string;
   departure_date?: string;
   return_date?: string;
+  arrival_back_home_date?: string;
+  program_period?: string;
+  duration_weeks?: string;
+  lessons_per_week?: string;
+  study_hours_per_week?: string;
+  total_study_hours?: string;
   cost?: string;
   contract_date?: string;
 };

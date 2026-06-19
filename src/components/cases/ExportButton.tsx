@@ -15,11 +15,7 @@ export function ExportButton({ caseData }: Props) {
   async function handleExport() {
     setExporting(true);
     try {
-      const blob = await exportCaseAsZip(
-        caseData,
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-      );
+      const blob = await exportCaseAsZip(caseData);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;

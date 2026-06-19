@@ -1,20 +1,26 @@
 import Link from "next/link";
-import { Case, ChecklistItem } from "@/types";
+import { Case, ChecklistItem, Document } from "@/types";
 import { CHECKLIST_STEPS } from "@/lib/constants";
+import { getAcademicSummary, parseStudyHours, STUDY_HOURS_REQUIREMENT } from "@/lib/academicSummary";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
 type Props = {
   caseData: Case;
   checklistItems: ChecklistItem[];
+  documents?: Pick<Document, "document_type" | "extracted_data" | "confirmed_data">[];
 };
 
-export function CaseCard({ caseData, checklistItems }: Props) {
+export function CaseCard({ caseData, checklistItems, documents }: Props) {
   const completed = checklistItems.filter((c) => c.completed).length;
   const total = CHECKLIST_STEPS.length;
   const pct = Math.round((completed / total) * 100);
 
   const isComplete = completed === total;
+
+  const studyHours = documents
+    ? parseStudyHours(getAcademicSummary(documents).total_study_hours.value)
+    : null;
 
   return (
     <Link href={`/cases/${caseData.id}`}>
@@ -25,6 +31,15 @@ export function CaseCard({ caseData, checklistItems }: Props) {
               <p className="font-medium text-sm truncate">{caseData.student_name}</p>
               <p className="text-xs text-slate-500">{caseData.student_number} · {caseData.email}</p>
               <p className="text-xs text-slate-500">{caseData.course_type}</p>
+              {studyHours !== null && (
+                <p
+                  className={`text-xs font-medium ${
+                    studyHours < STUDY_HOURS_REQUIREMENT ? "text-red-600" : "text-green-600"
+                  }`}
+                >
+                  Study hours: {studyHours}h
+                </p>
+              )}
             </div>
             <Badge
               variant={isComplete ? "default" : "secondary"}

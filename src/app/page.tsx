@@ -2,13 +2,16 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Case, ChecklistItem } from "@/types";
+import { Case, ChecklistItem, Document } from "@/types";
 import { createClient } from "@/lib/supabase/client";
 import { CaseCard } from "@/components/cases/CaseCard";
 import { FilterBar } from "@/components/shared/FilterBar";
 import { Button } from "@/components/ui/button";
 
-type CaseWithChecklist = Case & { checklist_items: ChecklistItem[] };
+type CaseWithChecklist = Case & {
+  checklist_items: ChecklistItem[];
+  documents: Pick<Document, "document_type" | "extracted_data" | "confirmed_data">[];
+};
 
 export default function DashboardPage() {
   const [cases, setCases] = useState<CaseWithChecklist[]>([]);
@@ -21,7 +24,7 @@ export default function DashboardPage() {
     async function load() {
       const { data } = await supabase
         .from("cases")
-        .select("*, checklist_items(*)")
+        .select("*, checklist_items(*), documents(document_type, extracted_data, confirmed_data)")
         .order("created_at", { ascending: false });
       setCases((data as CaseWithChecklist[]) ?? []);
       setLoading(false);
@@ -81,6 +84,7 @@ export default function DashboardPage() {
                     key={c.id}
                     caseData={c}
                     checklistItems={c.checklist_items}
+                    documents={c.documents}
                   />
                 ))}
               </div>

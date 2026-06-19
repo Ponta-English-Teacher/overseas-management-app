@@ -1,12 +1,11 @@
 import JSZip from "jszip";
 import { CaseWithDetails } from "@/types";
 import { CHECKLIST_STEPS } from "@/lib/constants";
+import { getAcademicSummary, parseStudyHours, STUDY_HOURS_REQUIREMENT } from "@/lib/academicSummary";
+import { createClient } from "@/lib/supabase/client";
 
-export async function exportCaseAsZip(
-  caseData: CaseWithDetails,
-  supabaseUrl: string,
-  supabaseAnonKey: string
-): Promise<Blob> {
+export async function exportCaseAsZip(caseData: CaseWithDetails): Promise<Blob> {
+  const supabase = createClient();
   const zip = new JSZip();
 
   // basic_info.json
@@ -39,14 +38,26 @@ export async function exportCaseAsZip(
   }).join("\n");
   zip.file("progress_checklist.csv", csvHeader + csvRows);
 
-  // extracted_info.json
-  const extractedInfo = caseData.documents
-    .filter((d) => d.extracted_data && d.extraction_confirmed)
-    .map((d) => ({
-      document_type: d.document_type,
-      file_name: d.file_name,
-      extracted_data: d.extracted_data,
-    }));
+  // extracted_info.json — academic_program_summary surfaces the fields the
+  // department checks (study hours, dates, etc.) without digging through
+  // each document's raw payload. documents[] keeps the per-file detail,
+  // preferring the teacher-confirmed data over the raw AI output.
+  const academicSummary = getAcademicSummary(caseData.documents);
+  const studyHours = parseStudyHours(academicSummary.total_study_hours.value);
+
+  const extractedInfo = {
+    academic_program_summary: {
+      ...academicSummary,
+      meets_60_hour_requirement: studyHours === null ? null : studyHours >= STUDY_HOURS_REQUIREMENT,
+    },
+    documents: caseData.documents
+      .filter((d) => d.extraction_confirmed && (d.confirmed_data || d.extracted_data))
+      .map((d) => ({
+        document_type: d.document_type,
+        file_name: d.file_name,
+        extracted_data: d.confirmed_data ?? d.extracted_data,
+      })),
+  };
   zip.file("extracted_info.json", JSON.stringify(extractedInfo, null, 2));
 
   // report_status.txt
@@ -58,24 +69,37 @@ export async function exportCaseAsZip(
   ];
   zip.file("report_status.txt", reportLines.join("\n"));
 
-  // uploaded PDFs from Supabase Storage
-  const pdfFolder = zip.folder("documents");
-  if (pdfFolder) {
+  // Documents/ — all uploaded teacher-managed PDFs from Supabase Storage.
+  // Report PowerPoint files are never stored as case documents, but the
+  // extension check guards against anything that isn't a PDF.
+  const documentsFolder = zip.folder("Documents");
+  const exportErrors: string[] = [];
+
+  if (documentsFolder) {
     for (const doc of caseData.documents) {
+      if (!doc.file_name.toLowerCase().endsWith(".pdf")) continue;
+
       try {
-        const fileUrl = `${supabaseUrl}/storage/v1/object/authenticated/${doc.file_path}`;
-        const response = await fetch(fileUrl, {
-          headers: { Authorization: `Bearer ${supabaseAnonKey}` },
-        });
-        if (response.ok) {
-          const blob = await response.blob();
-          const arrayBuffer = await blob.arrayBuffer();
-          pdfFolder.file(doc.file_name, arrayBuffer);
+        const { data, error } = await supabase.storage
+          .from("case-documents")
+          .download(doc.file_path);
+
+        if (error || !data) {
+          exportErrors.push(`${doc.file_name}: ${error?.message ?? "download returned no data"}`);
+          continue;
         }
-      } catch {
-        // skip failed downloads silently
+
+        documentsFolder.file(doc.file_name, await data.arrayBuffer());
+      } catch (err) {
+        exportErrors.push(
+          `${doc.file_name}: ${err instanceof Error ? err.message : "unknown error"}`
+        );
       }
     }
+  }
+
+  if (exportErrors.length > 0) {
+    zip.file("export_errors.txt", exportErrors.join("\n"));
   }
 
   return zip.generateAsync({ type: "blob" });
